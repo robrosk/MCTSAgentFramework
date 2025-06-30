@@ -101,6 +101,22 @@ def extract_most_visited_path(root):
         node = best
     return path
 
+def extract_best_terminal_path(root):
+    best_path = []
+    best_score = -float('inf')
+    def dfs(node, path):
+        nonlocal best_path, best_score
+        if node.is_terminal_state():
+            score = getattr(node, 'wins', 0) / getattr(node, 'visits', 1)
+            if score > best_score:
+                best_score = score
+                best_path = path[:]
+            return
+        for child in node.children.values():
+            dfs(child, path + [(child.value, child.state['pos'], child.state['carried'], list(child.state['delivered']))])
+    dfs(root, [])
+    return best_path
+
 def run_resource_gather_example():
     print("=== Resource Gathering & Delivery MCTS Example ===\n")
     try:
@@ -174,7 +190,7 @@ def run_managed_mcts_example():
         master_agent=master_agent,
         problem_description=problem_description,
         max_agents=2,
-        max_iterations=10
+        max_iterations=200
     )
     # Analyze problem and create structure
     print("Analyzing problem and designing MCTS structure...")
@@ -200,7 +216,7 @@ def run_managed_mcts_example():
     # Run MCTS search
     print(f"\nRunning MCTS search with specialized agents...")
     try:
-        best_child = managed_mcts.search(iterations=10)
+        best_child = managed_mcts.search(iterations=200)
         if best_child:
             print(f"\nRecommended first move: {best_child.value}")
             print(f"\nAction Statistics:")
@@ -213,6 +229,13 @@ def run_managed_mcts_example():
             plan = extract_most_visited_path(managed_mcts.root)
             for i, (action, pos, carried, delivered) in enumerate(plan):
                 print(f"  Step {i+1}: {action} -> pos={pos}, carried={carried}, delivered={delivered}")
+            print(f"\nBest Full Solution Found:")
+            best_full = extract_best_terminal_path(managed_mcts.root)
+            if best_full:
+                for i, (action, pos, carried, delivered) in enumerate(best_full):
+                    print(f"  Step {i+1}: {action} -> pos={pos}, carried={carried}, delivered={delivered}")
+            else:
+                print("  No complete solution found.")
         else:
             print("No best action found")
     except Exception as e:
@@ -226,13 +249,31 @@ def run_simple_managed_example():
     print("=== Simple Managed MCTS Example (No API) ===\n")
     class DummyAgent:
         def chat(self, prompt, statement=None, parameters=None):
-            return "0.5"  # Always return neutral score
+            # Heuristic: more delivered, closer to goal, fewer steps
+            import re
+            delivered = 0
+            if "delivered" in prompt:
+                delivered_match = re.search(r"delivered (\[.*?\])", prompt)
+                if delivered_match:
+                    delivered = len([x for x in delivered_match.group(1).strip('[]').split(',') if x.strip()])
+            pos = (0, 0)
+            pos_match = re.search(r"pos=\((\d+), (\d+)\)", prompt)
+            if pos_match:
+                pos = (int(pos_match.group(1)), int(pos_match.group(2)))
+            gx, gy = 4, 4
+            dist = abs(pos[0] - gx) + abs(pos[1] - gy)
+            steps = 0
+            path_match = re.search(r"path (\[.*?\])", prompt)
+            if path_match:
+                steps = len([x for x in path_match.group(1).strip('[]').split('),') if x.strip()])
+            score = delivered + (1.0 - dist / 8.0) - 0.01 * (steps - 1)
+            return str(max(0.0, min(1.0, score)))
     master_agent = DummyAgent()
     manager = MCTSManager(
         master_agent=master_agent,
         problem_description="Simple resource gathering problem",
         max_agents=2,
-        max_iterations=10
+        max_iterations=200
     )
     config = manager._get_default_config()
     manager.mcts_config = config
@@ -251,7 +292,7 @@ def run_simple_managed_example():
     }
     managed_mcts = manager.create_managed_mcts(initial_state, ResourceGatherNode)
     print(f"\nRunning simple MCTS search...")
-    best_child = managed_mcts.search(iterations=10)
+    best_child = managed_mcts.search(iterations=200)
     if best_child:
         print(f"\nRecommended action: {best_child.value}")
         stats = managed_mcts.get_action_statistics()
@@ -261,6 +302,13 @@ def run_simple_managed_example():
         plan = extract_most_visited_path(managed_mcts.root)
         for i, (action, pos, carried, delivered) in enumerate(plan):
             print(f"  Step {i+1}: {action} -> pos={pos}, carried={carried}, delivered={delivered}")
+        print(f"\nBest Full Solution Found:")
+        best_full = extract_best_terminal_path(managed_mcts.root)
+        if best_full:
+            for i, (action, pos, carried, delivered) in enumerate(best_full):
+                print(f"  Step {i+1}: {action} -> pos={pos}, carried={carried}, delivered={delivered}")
+        else:
+            print("  No complete solution found.")
     else:
         print("No best action found.")
 
