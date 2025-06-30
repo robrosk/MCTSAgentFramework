@@ -1,37 +1,56 @@
-import openai
-from typing import List, Dict, Any, Optional
+import os
 import json
 import logging
-import os
+import time
+import random
+from typing import List, Dict, Any, Optional
 from dotenv import load_dotenv
+from openai import AzureOpenAI
+from azure.core.credentials import AzureKeyCredential
 
 load_dotenv()
 
 class Agent:
     """
-    Agent class that works with OpenAI's API.
+    Agent class that works with Azure OpenAI's API (2024-12-01-preview).
     Includes reasoning, execution capabilities, and message history management.
     """
     
-    def __init__(self, 
-                 api_key: str,
-                 model: str = "gpt-4o",
-                 system_prompt: str = "You are a helpful AI assistant.",
-                 max_history: int = 50):
+    def __init__(self, system_prompt: str = "You are a helpful AI assistant.", max_history: int = 50):
         """
-        Initialize the agent.
+        Initialize the agent for Azure OpenAI.
         
         Args:
-            api_key: OpenAI API key
-            model: OpenAI model to use (default: gpt-4)
             system_prompt: System prompt for the agent
             max_history: Maximum number of messages to keep in history
         """
-        self.client = openai.OpenAI(api_key=api_key)
-        self.model = model
+        # Load from environment if not provided
+        self.api_key = os.environ.get("AZURE_OPENAI_API_KEY")
+        self.endpoint = os.environ.get("AZURE_OPENAI_ENDPOINT")
+        self.api_version = os.environ.get("AZURE_OPENAI_API_VERSION", "2024-12-01-preview")
+        self.deployment_name = os.environ.get("AZURE_OPENAI_DEPLOYMENT_NAME")
+        # Parameter validation for required env vars
+        missing = []
+        if not self.api_key:
+            missing.append("AZURE_OPENAI_API_KEY")
+        if not self.endpoint:
+            missing.append("AZURE_OPENAI_ENDPOINT")
+        if not self.deployment_name:
+            missing.append("AZURE_OPENAI_DEPLOYMENT_NAME")
+        if missing:
+            raise ValueError(f"Missing required environment variables: {', '.join(missing)}")
+        
+        self.model = self.deployment_name
         self.system_prompt = system_prompt
         self.max_history = max_history
         self.message_history: List[Dict[str, str]] = []
+
+        # Use AzureOpenAI client with correct parameters
+        self.client = AzureOpenAI(
+            azure_endpoint=self.endpoint,
+            api_version=self.api_version,
+            api_key=self.api_key
+        )
         
         # Initialize with system prompt
         self._add_message("system", system_prompt)
@@ -50,6 +69,29 @@ class Agent:
             system_msg = self.message_history[0]
             self.message_history = [system_msg] + self.message_history[-(self.max_history-1):]
     
+    def _call_with_backoff(self, func, *args, max_retries: int = 5, base_delay: float = 1.0, **kwargs):
+        """
+        Call a function with exponential backoff on exceptions.
+        Args:
+            func: The function to call
+            *args, **kwargs: Arguments to pass to the function
+            max_retries: Maximum number of retries
+            base_delay: Initial delay in seconds
+        Returns:
+            The result of the function call
+        Raises:
+            The last exception if all retries fail
+        """
+        for attempt in range(max_retries):
+            try:
+                return func(*args, **kwargs)
+            except Exception as e:
+                if attempt == max_retries - 1:
+                    raise
+                sleep_time = base_delay * (2 ** attempt) + random.uniform(0, 0.5)
+                self.logger.warning(f"Retrying after error: {e}. Attempt {attempt+1}/{max_retries}. Sleeping {sleep_time:.2f}s...")
+                time.sleep(sleep_time)
+    
     def reason(self, query: str, context: Optional[str] = None) -> str:
         """
         Use the agent to reason about a query.
@@ -57,11 +99,11 @@ class Agent:
         Args:
             query: The question or problem to reason about
             context: Optional additional context
+            add_to_history: Whether to add the reasoning to the message history
             
         Returns:
             The agent's reasoning response
         """
-        # Prepare the reasoning prompt
         reasoning_prompt = f"Please reason through this query step by step: {query}"
         if context:
             reasoning_prompt += f"\n\nAdditional context: {context}"
@@ -69,14 +111,14 @@ class Agent:
         self._add_message("user", reasoning_prompt)
         
         try:
-            response = self.client.chat.completions.create(
+            response = self._call_with_backoff(
+                self.client.chat.completions.create,
                 model=self.model,
                 messages=self.message_history,
                 temperature=0.7
             )
             
             reasoning = response.choices[0].message.content
-            self._add_message("assistant", reasoning)
             
             self.logger.info(f"Reasoning completed for query: {query[:50]}...")
             return reasoning
@@ -85,35 +127,34 @@ class Agent:
             self.logger.error(f"Error in reasoning: {str(e)}")
             return f"Error occurred during reasoning: {str(e)}"
     
-    def execute(self, task: str, parameters: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    def execute(self, task: str, parameters: Optional[Dict[str, Any]] = None) -> Any:
         """
         Execute a task using the agent.
         
         Args:
             task: Description of the task to execute
             parameters: Optional parameters for the task
+            add_to_history: Whether to add the execution result to the message history
             
         Returns:
             Dictionary containing execution results
         """
-        # Prepare execution prompt
-        execution_prompt = f"Execute this task: {task}"
+        execution_prompt = f"Execute the following task: {task}"
         if parameters:
+            self._validate_json_serializable(parameters, context="parameters (execute)")
             execution_prompt += f"\n\nParameters: {json.dumps(parameters, indent=2)}"
-        
-        execution_prompt += "\n\nPlease provide a structured response with your execution plan and results."
-        
+        execution_prompt += "\n\nPlease provide only the results."
         self._add_message("user", execution_prompt)
         
         try:
-            response = self.client.chat.completions.create(
+            response = self._call_with_backoff(
+                self.client.chat.completions.create,
                 model=self.model,
                 messages=self.message_history,
                 temperature=0.3
             )
             
             execution_result = response.choices[0].message.content
-            self._add_message("assistant", execution_result)
             
             self.logger.info(f"Task executed: {task[:50]}...")
             
@@ -163,33 +204,36 @@ class Agent:
         self._add_message("system", new_prompt)
         self.logger.info("System prompt updated")
     
-    def chat(self, message: str) -> str:
+    def chat(self, message: str, statement: Optional[str] = None, parameters: Optional[Dict[str, Any]] = None) -> str:
         """
-        Simple chat interface with the agent.
-        
+        Chat with the agent, optionally reasoning about a separate statement before executing the message.
+
         Args:
-            message: User message
-            
+            message: The message to execute (and default to reason about if statement is not provided)
+            statement: Optional statement to reason about before executing the message
+            parameters: Optional parameters for the execution step
+
         Returns:
-            Agent's response
+            Agent's response (execution result as a string)
         """
         self._add_message("user", message)
+        to_reason = statement if statement is not None else message
+        if parameters is not None:
+            self._validate_json_serializable(parameters, context="parameters (chat)")
+        result = self.reason_and_execute(to_reason, message, parameters)
+        # Always return a string for the assistant's reply
+        if isinstance(result, dict):
+            if "result" in result and isinstance(result["result"], str):
+                agent_response = result["result"]
+            elif "error" in result and isinstance(result["error"], str):
+                agent_response = result["error"]
+            else:
+                agent_response = json.dumps(result, indent=2)
+        else:
+            agent_response = str(result)
+        self._add_message("assistant", agent_response)
         
-        try:
-            response = self.client.chat.completions.create(
-                model=self.model,
-                messages=self.message_history,
-                temperature=0.7
-            )
-            
-            agent_response = response.choices[0].message.content
-            self._add_message("assistant", agent_response)
-            
-            return agent_response
-            
-        except Exception as e:
-            self.logger.error(f"Error in chat: {str(e)}")
-            return f"Error occurred: {str(e)}"
+        return agent_response
     
     def _get_timestamp(self) -> str:
         """Get current timestamp as string."""
@@ -205,28 +249,59 @@ class Agent:
             "system_prompt": self.system_prompt
         }
 
+    def reason_and_execute(self, query: str, task: str, parameters: Optional[Dict[str, Any]] = None) -> Any:
+        """
+        Perform reasoning on a query, then use the reasoning result to inform the execution step.
 
-# Example usage
+        Args:
+            query: The question or problem to reason about
+            task: Description of the task to execute
+            parameters: Optional parameters for the task
+
+        Returns:
+            The execution result only (not both reasoning and execution)
+        """
+        reasoning_result = self.reason(query)
+        
+        # Remove the last user message (reasoning prompt) from history before execution
+        if self.message_history and self.message_history[-1]["role"] == "user":
+            self.message_history.pop()
+            
+        execution_context = parameters.copy() if parameters else {}
+        execution_context["reasoning"] = reasoning_result
+        
+        # Remove the last user message (execution prompt) from history before execution
+        if self.message_history and self.message_history[-2]["role"] == "user":
+            self.message_history.pop(-2)
+        
+        execution_result = self.execute(task, execution_context)
+        return execution_result
+
+    def _validate_json_serializable(self, obj, context: str = "parameters"):
+        try:
+            json.dumps(obj)
+        except Exception as e:
+            raise ValueError(f"{context} must be JSON serializable: {e}")
+
+# Example usage for Azure OpenAI
 if __name__ == "__main__":
-    # Example of how to use the agent
-    # Note: You'll need to provide your actual OpenAI API key
+    # Example of how to use the agent with Azure OpenAI
+    # Set these environment variables in your .env or system:
+    #   AZURE_OPENAI_API_KEY
+    #   AZURE_OPENAI_ENDPOINT
+    #   AZURE_OPENAI_API_VERSION (optional, default: 2024-12-01-preview)
+    #   AZURE_OPENAI_DEPLOYMENT_NAME (your deployment name)
+
+    agent = Agent()
     
-    agent = Agent(api_key=os.environ["OPENAI_API_KEY"])
+    # Combined reasoning and execution example
+    result = agent.chat(
+        message="Create a simple plan for learning Python",
+        statement="What are best practices to learn programming?",
+        parameters={"timeframe": "30 days", "skill_level": "beginner"}
+    )
+    print(f"COT Result:\n\n{result}\n\n")
     
-    # Reasoning example
-    reasoning_result = agent.reason("What are the pros and cons of renewable energy?")
-    print("Reasoning Result:", reasoning_result)
+    input("Press Enter to continue...")
     
-    # Execution example
-    execution_result = agent.execute("Create a simple plan for learning Python", 
-                                    {"timeframe": "30 days", "skill_level": "beginner"})
-    print("Execution Result:", execution_result)
-    
-    # Chat example
-    response = agent.chat("Hello! How can you help me today?")
-    print("Chat Response:", response)
-    
-    # View message history
-    print("Message History:", agent.get_message_history())
-    
-    print("Agent class created successfully! Uncomment the example code above to test it.")
+    print("\n\nMessage History:\n", agent.get_message_history())
