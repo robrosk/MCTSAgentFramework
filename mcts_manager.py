@@ -86,9 +86,8 @@ class MCTSManager:
         
         Make sure the JSON is valid and complete.
         """
-        
-        response = self.master_agent.reason(analysis_prompt)
-        
+        # Use chat for both reasoning and execution
+        response = self.master_agent.chat(analysis_prompt, statement=analysis_prompt)
         try:
             # Extract JSON from response
             json_match = re.search(r'\{.*\}', response, re.DOTALL)
@@ -98,7 +97,6 @@ class MCTSManager:
                 return config
             else:
                 raise ValueError("No JSON found in response")
-                
         except (json.JSONDecodeError, ValueError) as e:
             print(f"Error parsing agent response: {e}")
             print(f"Raw response: {response}")
@@ -149,37 +147,22 @@ class MCTSManager:
     def create_specialized_agents(self, config: Dict[str, Any]) -> Dict[str, Agent]:
         """
         Create specialized agents based on the configuration.
-        
         Args:
             config: Configuration dictionary from analysis
-            
         Returns:
             Dictionary mapping agent IDs to Agent instances
+        Note: Agent configuration is now handled via environment variables only.
         """
         agents = {}
-        
-        try:
-            api_key = os.environ["OPENAI_API_KEY"]
-        except KeyError:
-            print("Warning: OPENAI_API_KEY not found. Agents will not be functional.")
-            api_key = "dummy_key"
-        
         for agent_config in config["recommended_agents"]:
             agent_id = agent_config["agent_id"]
             role_prompt = agent_config["role_prompt"]
-            
             try:
-                agent = Agent(
-                    api_key=api_key,
-                    system_prompt=role_prompt,
-                    model="gpt-4o"
-                )
+                agent = Agent(system_prompt=role_prompt)
                 agents[agent_id] = agent
                 print(f"Created agent: {agent_config['role_name']} ({agent_id})")
-                
             except Exception as e:
                 print(f"Failed to create agent {agent_id}: {e}")
-        
         self.agents_pool = agents
         return agents
     
@@ -330,6 +313,31 @@ class MCTSManager:
             print(f"    - Depth {depth}: {agent_id}")
         
         print(f"\nReasoning: {config['reasoning']}")
+
+    def create_child_node(self, parent, action, depth, tree, node_class=None):
+        """
+        Create and add a child node to the tree, using manager's agent/role assignment.
+        Args:
+            parent: Parent node
+            action: Action leading to the new node
+            depth: Depth of the new node
+            tree: The Tree instance
+            node_class: Node class to instantiate (default: parent's class)
+        Returns:
+            The newly created child node
+        """
+        agent, role_prompt = self.get_agent_for_node(parent, depth)
+        child_state = parent.apply_action(action)
+        node_class = node_class or parent.__class__
+        child = node_class(
+            value=action,
+            parent=parent,
+            agent=agent,
+            role_prompt=role_prompt,
+            state=child_state
+        )
+        tree.add_node(parent, child)
+        return child
 
 
 class ManagedMCTS(MCTS):

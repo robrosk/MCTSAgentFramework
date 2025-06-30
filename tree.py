@@ -409,6 +409,35 @@ class Tree:
             "root_value": self.root.value
         }
 
+    def add_node(self, parent: Node, child: Node) -> bool:
+        """
+        Add a child node to the parent node in the tree.
+        Args:
+            parent: Parent node
+            child: Child node to add
+        Returns:
+            True if added, False otherwise
+        """
+        return parent.add_child(child)
+
+    def expand_node(self, parent: Node, action: Any, agent: Any, role_prompt: str, state: Any, node_class=None) -> Node:
+        """
+        Create a new node for the given action and add it as a child to the parent.
+        Args:
+            parent: Parent node
+            action: Action leading to the new node
+            agent: Agent for the new node
+            role_prompt: Role prompt for the new node
+            state: State for the new node
+            node_class: Class to instantiate (default: Node)
+        Returns:
+            The newly created child node
+        """
+        node_class = node_class or Node
+        child = node_class(value=action, parent=parent, agent=agent, role_prompt=role_prompt, state=state)
+        self.add_node(parent, child)
+        return child
+
 
 # Example usage
 if __name__ == "__main__":

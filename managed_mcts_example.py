@@ -8,177 +8,80 @@ from mcts_manager import MCTSManager, ManagedMCTS
 # Load environment variables
 load_dotenv()
 
-
-class BusinessStrategyNode(MCTSNode):
-    """
-    MCTS node for business strategy decisions.
-    """
-    
+class ResourceGatherNode(MCTSNode):
+    GRID_SIZE = 5
+    RESOURCES = {'wood': (1, 3), 'stone': (3, 1)}
+    GOAL = (4, 4)
     def apply_action(self, action):
-        """Apply a business action to get the next state."""
-        new_state = self.state.copy()
-        new_state['quarter'] += 1
-        new_state['decisions'].append(action)
+        state = self.state.copy()
+        pos = state['pos']
+        carried = state['carried']
+        delivered = state['delivered'][:]
+        path = state['path'][:]
+        resources = state['resources'].copy()
+        if action in ['up', 'down', 'left', 'right']:
+            x, y = pos
+            if action == 'up':
+                y = max(0, y - 1)
+            elif action == 'down':
+                y = min(self.GRID_SIZE - 1, y + 1)
+            elif action == 'left':
+                x = max(0, x - 1)
+            elif action == 'right':
+                x = min(self.GRID_SIZE - 1, x + 1)
+            pos = (x, y)
+            path.append(pos)
+        elif action.startswith('pickup_'):
+            res = action.split('_')[1]
+            if carried is None and pos == resources[res] and res not in delivered:
+                carried = res
+        elif action == 'deliver':
+            if carried and pos == self.GOAL:
+                delivered.append(carried)
+                carried = None
+        return {
+            'pos': pos,
+            'carried': carried,
+            'delivered': delivered,
+            'resources': resources,
+            'path': path
+        }
         
-        # Simulate consequences of different actions
-        if action == 'product_development':
-            new_state['product_quality'] += random.randint(10, 25)
-            new_state['resources'] -= random.randint(15, 25)
-            new_state['technical_debt'] += random.randint(0, 10)
-            
-        elif action == 'marketing_investment':
-            new_state['market_awareness'] += random.randint(15, 30)
-            new_state['resources'] -= random.randint(10, 20)
-            new_state['customer_acquisition'] += random.randint(5, 15)
-            
-        elif action == 'hire_technical':
-            new_state['technical_capacity'] += random.randint(20, 35)
-            new_state['resources'] -= random.randint(20, 30)
-            new_state['operational_costs'] += random.randint(5, 10)
-            
-        elif action == 'hire_sales':
-            new_state['sales_capacity'] += random.randint(15, 25)
-            new_state['resources'] -= random.randint(15, 25)
-            new_state['operational_costs'] += random.randint(3, 8)
-            
-        elif action == 'expand_markets':
-            new_state['market_reach'] += random.randint(20, 40)
-            new_state['resources'] -= random.randint(25, 40)
-            new_state['complexity'] += random.randint(10, 20)
-            
-        elif action == 'deepen_current_market':
-            new_state['market_penetration'] += random.randint(15, 30)
-            new_state['resources'] -= random.randint(10, 20)
-            new_state['customer_loyalty'] += random.randint(10, 20)
-            
-        elif action == 'seek_funding':
-            funding_amount = random.randint(100, 200)
-            new_state['resources'] += funding_amount
-            new_state['investor_pressure'] += random.randint(15, 25)
-            new_state['equity_dilution'] += random.randint(10, 20)
-            
-        elif action == 'bootstrap':
-            new_state['autonomy'] += random.randint(10, 20)
-            new_state['resource_efficiency'] += random.randint(5, 15)
-            # No resource cost, but slower growth
-        
-        # Apply some general effects
-        new_state['resources'] = max(0, new_state['resources'])  # Can't go negative
-        
-        # Random market events
-        if random.random() < 0.1:  # 10% chance of market event
-            market_event = random.choice(['positive', 'negative'])
-            if market_event == 'positive':
-                new_state['resources'] += random.randint(10, 30)
-                new_state['market_awareness'] += random.randint(5, 15)
-            else:
-                new_state['resources'] -= random.randint(5, 20)
-                new_state['competitive_pressure'] += random.randint(5, 15)
-        
-        return new_state
-    
     def get_possible_actions(self):
-        """Get possible business actions from current state."""
-        if self.state['quarter'] >= 5:  # Max 5 quarters
-            return []
-        
-        actions = [
-            'product_development',
-            'marketing_investment', 
-            'hire_technical',
-            'hire_sales',
-            'expand_markets',
-            'deepen_current_market',
-            'seek_funding',
-            'bootstrap'
-        ]
-        
-        # Filter actions based on current state
-        filtered_actions = []
-        for action in actions:
-            if action in ['product_development', 'marketing_investment', 'hire_technical', 
-                         'hire_sales', 'expand_markets', 'deepen_current_market']:
-                if self.state['resources'] >= 10:  # Need minimum resources
-                    filtered_actions.append(action)
-            elif action == 'seek_funding':
-                if self.state['equity_dilution'] < 50:  # Don't dilute too much
-                    filtered_actions.append(action)
-            else:  # bootstrap
-                filtered_actions.append(action)
-        
-        return filtered_actions if filtered_actions else ['bootstrap']  # Always have at least one option
+        actions = []
+        x, y = self.state['pos']
+        # Movement
+        if y > 0:
+            actions.append('up')
+        if y < self.GRID_SIZE - 1:
+            actions.append('down')
+        if x > 0:
+            actions.append('left')
+        if x < self.GRID_SIZE - 1:
+            actions.append('right')
+        # Pickup
+        for res, loc in self.state['resources'].items():
+            if self.state['carried'] is None and self.state['pos'] == loc and res not in self.state['delivered']:
+                actions.append(f'pickup_{res}')
+        # Deliver
+        if self.state['carried'] and self.state['pos'] == self.GOAL:
+            actions.append('deliver')
+        return actions
     
     def is_terminal_state(self):
-        """Check if this is a terminal state."""
-        return (self.state['quarter'] >= 5 or 
-                self.state['resources'] <= 0 or 
-                len(self.get_possible_actions()) == 0)
+        return len(self.state['delivered']) == len(self.state['resources'])
     
     def evaluate_state(self):
-        """Evaluate the current business state."""
         if not self.agent:
-            # Simple heuristic evaluation
-            score = (
-                self.state['resources'] * 0.15 +
-                self.state['product_quality'] * 0.20 +
-                self.state['market_awareness'] * 0.15 +
-                self.state['technical_capacity'] * 0.15 +
-                self.state['sales_capacity'] * 0.10 +
-                self.state['market_reach'] * 0.10 +
-                self.state['customer_loyalty'] * 0.15 -
-                self.state['technical_debt'] * 0.05 -
-                self.state['operational_costs'] * 0.05 -
-                self.state['investor_pressure'] * 0.03 -
-                self.state['competitive_pressure'] * 0.05
-            ) / 200  # Normalize
-            
-            return max(0.0, min(1.0, score))
-        
-        # Use agent for evaluation with detailed state description
-        state_description = f"""
-        Business State Analysis (Quarter {self.state['quarter']}/5):
-        
-        Financial Metrics:
-        - Resources: {self.state['resources']}
-        - Operational Costs: {self.state['operational_costs']}
-        
-        Product & Technology:
-        - Product Quality: {self.state['product_quality']}
-        - Technical Capacity: {self.state['technical_capacity']}
-        - Technical Debt: {self.state['technical_debt']}
-        
-        Market Position:
-        - Market Awareness: {self.state['market_awareness']}
-        - Market Reach: {self.state['market_reach']}
-        - Market Penetration: {self.state['market_penetration']}
-        - Customer Loyalty: {self.state['customer_loyalty']}
-        - Customer Acquisition: {self.state['customer_acquisition']}
-        
-        Team & Operations:
-        - Sales Capacity: {self.state['sales_capacity']}
-        
-        Strategic Factors:
-        - Autonomy: {self.state['autonomy']}
-        - Resource Efficiency: {self.state['resource_efficiency']}
-        - Equity Dilution: {self.state['equity_dilution']}%
-        - Investor Pressure: {self.state['investor_pressure']}
-        - Competitive Pressure: {self.state['competitive_pressure']}
-        - Complexity: {self.state['complexity']}
-        
-        Decision History: {self.state['decisions']}
-        
-        Evaluate this business position on a scale of 0.0 to 1.0, considering:
-        - Financial sustainability
-        - Market position strength
-        - Growth potential
-        - Risk factors
-        - Strategic positioning for long-term success
-        
-        Provide only a numerical score between 0.0 and 1.0.
-        """
-        
-        response = self.reason_with_role(state_description)
-        
+            # Heuristic: more delivered, closer to goal, fewer steps
+            delivered = len(self.state['delivered'])
+            x, y = self.state['pos']
+            gx, gy = self.GOAL
+            dist = abs(x - gx) + abs(y - gy)
+            score = delivered + (1.0 - dist / (2 * (self.GRID_SIZE - 1))) - 0.01 * (len(self.state['path']) - 1)
+            return max(0.0, min(2.0, score)) / 2.0
+        state_desc = f"Agent at {self.state['pos']} carrying {self.state['carried']}, delivered {self.state['delivered']}, path {self.state['path']}. Goal: deliver all resources to {self.GOAL}."
+        response = self.agent.chat(state_desc)
         try:
             import re
             scores = re.findall(r'\b0?\.\d+\b|\b1\.0\b', response)
@@ -186,132 +89,132 @@ class BusinessStrategyNode(MCTSNode):
                 return float(scores[0])
         except:
             pass
-        
         return 0.5
+
+def extract_most_visited_path(root):
+    path = []
+    node = root
+    while not node.is_terminal_state() and node.children:
+        # Pick child with most visits
+        best = max(node.children.values(), key=lambda c: getattr(c, 'visits', 0))
+        path.append((best.value, best.state['pos'], best.state['carried'], list(best.state['delivered'])))
+        node = best
+    return path
+
+def run_resource_gather_example():
+    print("=== Resource Gathering & Delivery MCTS Example ===\n")
+    try:
+        master_agent = Agent()
+        print("Master agent created successfully")
+    except Exception:
+        master_agent = None
+        print("No agent found, using heuristic evaluation.")
+    problem_description = """
+    Resource Gathering: An agent in a 5x5 grid must collect wood at (1,3) and stone at (3,1), delivering both to (4,4). The agent can only carry one resource at a time. Find the optimal sequence of moves to deliver both resources in the fewest steps.
+    """
+    manager = MCTSManager(
+        master_agent=master_agent,
+        problem_description=problem_description,
+        max_agents=2
+    )
+    print("Analyzing problem and designing MCTS structure...")
+    config = manager.analyze_problem_and_create_structure()
+    print("\nCreating specialized agents...")
+    agents = manager.create_specialized_agents(config)
+    print("\nMCTS Configuration:")
+    manager.print_configuration()
+    initial_state = {
+        'pos': (0, 0),
+        'carried': None,
+        'delivered': [],
+        'resources': {'wood': (1, 3), 'stone': (3, 1)},
+        'path': [(0, 0)]
+    }
+    print(f"\nInitial State: {initial_state}")
+    print(f"\nCreating Managed MCTS...")
+    managed_mcts = manager.create_managed_mcts(initial_state, ResourceGatherNode)
+    print(f"Available actions: {managed_mcts.root.get_possible_actions()}")
+    print(f"\nRunning MCTS search with specialized agents...")
+    best_child = managed_mcts.search(iterations=200)
+    if best_child:
+        print(f"\nRecommended first move: {best_child.value}")
+        print(f"\nAction Statistics:")
+        stats = managed_mcts.get_action_statistics()
+        for action, stat in stats.items():
+            print(f"  {action}: visits={stat['visits']}, win_rate={stat['win_rate']:.3f}")
+        print(f"\nMCTS Tree Structure (top 2 levels):")
+        managed_mcts.print_tree(max_depth=2)
+        print(f"\nMost Visited Path (Best Plan):")
+        plan = extract_most_visited_path(managed_mcts.root)
+        for i, (action, pos, carried, delivered) in enumerate(plan):
+            print(f"  Step {i+1}: {action} -> pos={pos}, carried={carried}, delivered={delivered}")
+    else:
+        print("No best action found.")
 
 
 def run_managed_mcts_example():
-    """Run the managed MCTS example."""
-    print("=== Managed MCTS Business Strategy Example ===\n")
-    
+    """Run the managed MCTS example for resource gathering and delivery."""
+    print("=== Managed MCTS Resource Gathering & Delivery Example ===\n")
     try:
         # Create master agent
-        master_agent = Agent(api_key=os.environ["OPENAI_API_KEY"])
+        master_agent = Agent()
         print("Master agent created successfully")
-        
     except KeyError:
-        print("OPENAI_API_KEY not found in environment variables")
+        print("AZURE_OPENAI_API_KEY not found in environment variables")
         return
     except Exception as e:
         print(f"Error creating master agent: {e}")
         return
-    
-    # Define the business strategy problem
+    # Define the resource gathering problem
     problem_description = """
-    Startup Business Strategy Optimization:
-    
-    A technology startup needs to make strategic decisions over 5 quarters to achieve sustainable growth.
-    The company starts with limited resources and must balance multiple competing priorities:
-    
-    DECISION AREAS:
-    1. Product Development vs Marketing Investment
-    2. Technical Hiring vs Sales Hiring  
-    3. Market Expansion vs Market Deepening
-    4. Funding Strategy (Seek Investment vs Bootstrap)
-    
-    KEY METRICS TO OPTIMIZE:
-    - Financial sustainability (resources, costs)
-    - Product quality and technical capability
-    - Market position (awareness, reach, penetration)
-    - Team capabilities (technical, sales)
-    - Strategic positioning (autonomy, efficiency)
-    
-    CONSTRAINTS:
-    - Limited resources each quarter
-    - Market competition and external pressures
-    - Technical debt accumulation
-    - Investor pressure if seeking funding
-    - Operational complexity with growth
-    
-    The goal is to find the optimal sequence of decisions that maximizes long-term business success
-    while managing risks and resource constraints.
+    Resource Gathering: An agent in a 5x5 grid must collect wood at (1,3) and stone at (3,1), delivering both to (4,4). The agent can only carry one resource at a time. Find the optimal sequence of moves to deliver both resources in the fewest steps.
     """
-    
     # Create MCTS Manager
     manager = MCTSManager(
         master_agent=master_agent,
         problem_description=problem_description,
-        max_agents=4
+        max_agents=2,
+        max_iterations=10
     )
-    
     # Analyze problem and create structure
     print("Analyzing problem and designing MCTS structure...")
     config = manager.analyze_problem_and_create_structure()
-    
     # Create specialized agents
     print("\nCreating specialized agents...")
     agents = manager.create_specialized_agents(config)
-    
     # Print configuration
     print("\nMCTS Configuration:")
     manager.print_configuration()
-    
-    # Create initial business state
+    # Create initial resource gathering state
     initial_state = {
-        'quarter': 0,
-        'resources': 100,
-        'product_quality': 30,
-        'market_awareness': 20,
-        'technical_capacity': 25,
-        'sales_capacity': 15,
-        'market_reach': 10,
-        'market_penetration': 15,
-        'customer_loyalty': 20,
-        'customer_acquisition': 10,
-        'technical_debt': 5,
-        'operational_costs': 10,
-        'autonomy': 50,
-        'resource_efficiency': 30,
-        'equity_dilution': 0,
-        'investor_pressure': 0,
-        'competitive_pressure': 20,
-        'complexity': 15,
-        'decisions': []
+        'pos': (0, 0),
+        'carried': None,
+        'delivered': [],
+        'resources': {'wood': (1, 3), 'stone': (3, 1)},
+        'path': [(0, 0)]
     }
-    
-    print(f"\nInitial Business State:")
-    print(f"  Resources: {initial_state['resources']}")
-    print(f"  Product Quality: {initial_state['product_quality']}")
-    print(f"  Market Awareness: {initial_state['market_awareness']}")
-    print(f"  Technical Capacity: {initial_state['technical_capacity']}")
-    
-    # Create managed MCTS
+    print(f"\nInitial State: {initial_state}")
     print(f"\nCreating Managed MCTS...")
-    managed_mcts = manager.create_managed_mcts(initial_state, BusinessStrategyNode)
-    
+    managed_mcts = manager.create_managed_mcts(initial_state, ResourceGatherNode)
     print(f"Available actions: {managed_mcts.root.get_possible_actions()}")
-    
     # Run MCTS search
     print(f"\nRunning MCTS search with specialized agents...")
     try:
-        best_child = managed_mcts.search(iterations=50)  # Reduced for demo
-        
+        best_child = managed_mcts.search(iterations=10)
         if best_child:
-            print(f"\nRecommended action: {best_child.value}")
-            
-            # Show action statistics
+            print(f"\nRecommended first move: {best_child.value}")
             print(f"\nAction Statistics:")
             stats = managed_mcts.get_action_statistics()
             for action, stat in stats.items():
                 print(f"  {action}: visits={stat['visits']}, win_rate={stat['win_rate']:.3f}")
-            
-            # Show tree structure
             print(f"\nMCTS Tree Structure (top 2 levels):")
             managed_mcts.print_tree(max_depth=2)
-            
+            print(f"\nMost Visited Path (Best Plan):")
+            plan = extract_most_visited_path(managed_mcts.root)
+            for i, (action, pos, carried, delivered) in enumerate(plan):
+                print(f"  Step {i+1}: {action} -> pos={pos}, carried={carried}, delivered={delivered}")
         else:
             print("No best action found")
-            
     except Exception as e:
         print(f"Error during MCTS search: {e}")
         import traceback
@@ -321,75 +224,51 @@ def run_managed_mcts_example():
 def run_simple_managed_example():
     """Run a simple managed example without API calls."""
     print("=== Simple Managed MCTS Example (No API) ===\n")
-    
-    # Create a dummy agent
     class DummyAgent:
-        def reason(self, prompt, context=None):
+        def chat(self, prompt, statement=None, parameters=None):
             return "0.5"  # Always return neutral score
-    
     master_agent = DummyAgent()
-    
-    # Create manager with default config
     manager = MCTSManager(
         master_agent=master_agent,
-        problem_description="Simple test problem",
-        max_agents=2
+        problem_description="Simple resource gathering problem",
+        max_agents=2,
+        max_iterations=10
     )
-    
-    # Use default configuration
     config = manager._get_default_config()
     manager.mcts_config = config
-    
-    # Create dummy agents
     manager.agents_pool = {
         "general_strategist": DummyAgent(),
         "explorer": DummyAgent()
     }
-    
     print("Using default configuration")
     manager.print_configuration()
-    
-    # Create simple initial state
     initial_state = {
-        'quarter': 0,
-        'resources': 100,
-        'product_quality': 30,
-        'market_awareness': 20,
-        'technical_capacity': 25,
-        'sales_capacity': 15,
-        'market_reach': 10,
-        'market_penetration': 15,
-        'customer_loyalty': 20,
-        'customer_acquisition': 10,
-        'technical_debt': 5,
-        'operational_costs': 10,
-        'autonomy': 50,
-        'resource_efficiency': 30,
-        'equity_dilution': 0,
-        'investor_pressure': 0,
-        'competitive_pressure': 20,
-        'complexity': 15,
-        'decisions': []
+        'pos': (0, 0),
+        'carried': None,
+        'delivered': [],
+        'resources': {'wood': (1, 3), 'stone': (3, 1)},
+        'path': [(0, 0)]
     }
-    
-    # Create managed MCTS
-    managed_mcts = manager.create_managed_mcts(initial_state, BusinessStrategyNode)
-    
+    managed_mcts = manager.create_managed_mcts(initial_state, ResourceGatherNode)
     print(f"\nRunning simple MCTS search...")
-    best_child = managed_mcts.search(iterations=100)
-    
+    best_child = managed_mcts.search(iterations=10)
     if best_child:
         print(f"\nRecommended action: {best_child.value}")
-        
         stats = managed_mcts.get_action_statistics()
         for action, stat in stats.items():
             print(f"  {action}: visits={stat['visits']}, win_rate={stat['win_rate']:.3f}")
+        print(f"\nMost Visited Path (Best Plan):")
+        plan = extract_most_visited_path(managed_mcts.root)
+        for i, (action, pos, carried, delivered) in enumerate(plan):
+            print(f"  Step {i+1}: {action} -> pos={pos}, carried={carried}, delivered={delivered}")
+    else:
+        print("No best action found.")
 
 
 if __name__ == "__main__":
     print("Managed MCTS Example\n")
     print("Choose an option:")
-    print("1. Run with OpenAI Agents (requires API key)")
+    print("1. Run with AzureOpenAI Agents (requires API key)")
     print("2. Run simple example (no API required)")
     
     choice = input("\nEnter choice (1 or 2): ").strip()

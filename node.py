@@ -12,7 +12,8 @@ class Node:
                  node_id: Optional[str] = None,
                  parent: Optional['Node'] = None,
                  agent: Optional[Any] = None,
-                 role_prompt: Optional[str] = None):
+                 role_prompt: Optional[str] = None,
+                 state: Optional[Any] = None):
         """
         Initialize a node.
         
@@ -22,6 +23,7 @@ class Node:
             parent: Parent node reference
             agent: Agent instance for reasoning and execution (dependency injection)
             role_prompt: Role prompt for the agent
+            state: Optional state for the node
         """
         self.value = value
         self.node_id = node_id or str(uuid.uuid4())
@@ -30,6 +32,7 @@ class Node:
         self.metadata: Dict[str, Any] = {}  # Additional metadata storage
         self.agent = agent  # Injected agent dependency
         self.role_prompt = role_prompt or "You are a helpful AI assistant."
+        self.state = state
     
     def add_child(self, child: 'Node') -> bool:
         """
@@ -145,7 +148,7 @@ class Node:
         if context:
             full_prompt += f"\n\nContext: {context}"
         
-        return self.agent.reason(full_prompt, context)
+        return self.agent.chat(full_prompt)
     
     def execute_with_role(self, task: str, parameters: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         """
@@ -169,7 +172,9 @@ class Node:
         # Prepare the full task with role
         full_task = f"Role: {self.role_prompt}\n\nTask: {task}"
         
-        return self.agent.execute(full_task, parameters)
+        # Use agent.chat and return as dict for compatibility
+        result = self.agent.chat(full_task, parameters=parameters)
+        return {"success": True, "result": result, "task": task, "parameters": parameters}
     
     def chat_with_role(self, message: str) -> str:
         """

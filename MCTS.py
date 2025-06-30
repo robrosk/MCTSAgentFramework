@@ -161,11 +161,9 @@ class MCTSNode(Node):
             Evaluation score (0.0 to 1.0)
         """
         if not self.agent:
-            return random.random()  # Random evaluation if no agent
-        
-        # Use agent to evaluate the state
+            return random.random()
         evaluation_prompt = f"Evaluate this state and provide a score between 0.0 and 1.0: {self.state}"
-        response = self.reason_with_role(evaluation_prompt)
+        response = self.agent.chat(evaluation_prompt)
         
         try:
             # Try to extract a numerical score from the response
@@ -200,16 +198,16 @@ class MCTS:
             exploration_constant: UCB1 exploration parameter
             max_iterations: Maximum number of MCTS iterations
         """
-        self.root = MCTSNode(
+        self.root_node = MCTSNode(
             value="root",
             state=root_state,
             agent=agent,
             role_prompt=role_prompt
         )
+        self.tree = Tree(self.root_node)
         self.exploration_constant = exploration_constant
         self.max_iterations = max_iterations
-        
-        # Initialize root node
+        self.root = self.root_node  # For compatibility
         self.root.possible_actions = self.root.get_possible_actions()
         self.root.untried_actions = self.root.possible_actions.copy()
     
@@ -249,23 +247,23 @@ class MCTS:
             Selected/expanded leaf node
         """
         node = self.root
-        
-        # Selection: traverse down the tree using UCB1
+        depth = 0
         while not node.is_terminal_state() and node.is_fully_expanded():
             best_child = node.best_child(self.exploration_constant)
             if best_child is None:
                 break
             node = best_child
-        
-        # Expansion: add a new child if possible
+            depth += 1
         if not node.is_terminal_state() and not node.is_fully_expanded():
             action = random.choice(node.untried_actions)
-            node = node.add_child_with_action(action, agent=node.agent, role_prompt=node.role_prompt)
-            
-            # Initialize new node's actions
+            # Use manager if available, else tree.expand_node
+            node_class = getattr(self, 'problem_node_class', type(node))
+            if hasattr(self, 'manager') and self.manager is not None:
+                node = self.manager.create_child_node(node, action, depth + 1, self.tree, node_class=node_class)
+            else:
+                node = self.tree.expand_node(node, action, node.agent, node.role_prompt, node.apply_action(action), node_class=node_class)
             node.possible_actions = node.get_possible_actions()
             node.untried_actions = node.possible_actions.copy()
-        
         return node
     
     def simulate(self, node: MCTSNode) -> float:
@@ -278,18 +276,15 @@ class MCTS:
         Returns:
             Simulation reward
         """
-        # Use agent-based evaluation instead of random simulation
         if node.is_terminal_state():
             return node.evaluate_state()
         
-        # For non-terminal states, use agent to evaluate
         simulation_prompt = f"""
         Analyze this game/problem state and predict the likely outcome.
         State: {node.state}
         Provide a score between 0.0 (worst) and 1.0 (best) representing the quality of this position.
         """
-        
-        response = node.reason_with_role(simulation_prompt)
+        response = node.agent.chat(simulation_prompt) if node.agent else "0.5"
         
         try:
             # Extract numerical score from agent response

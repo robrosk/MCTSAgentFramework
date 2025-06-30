@@ -65,7 +65,9 @@ MCTSAgents/
 4. **Set up environment variables**:
    Create a `.env` file in the project root:
    ```
-   OPENAI_API_KEY=your_openai_api_key_here
+   AZURE_OPENAI_API_KEY="your AzureOpenAI key"
+   AZURE_OPENAI_ENDPOINT="your endpoint"
+   AZURE_OPENAI_DEPLOYMENT_NAME="model name"
    ```
 
 ## Quick Start
