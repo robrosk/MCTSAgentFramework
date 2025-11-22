@@ -314,16 +314,8 @@ Configure agents for different tree depths:
 4. Add tests if applicable
 5. Submit a pull request
 
-## License
-
-[Add your license information here]
-
 ## Acknowledgments
 
-- OpenAI for providing the GPT models
+- AzureOpenAI for providing the GPT models
 - Monte Carlo Tree Search research community
 - Contributors and testers
-
-## Contact
-
-[Add your contact information here] 
